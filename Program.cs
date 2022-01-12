@@ -384,7 +384,7 @@ namespace HDD_Ping
             var caption = o.Properties["Caption"].Value.ToString();
             var deviceID = o.Properties["DeviceID"].Value.ToString();
             var size = ulong.Parse(o.Properties["Size"].Value.ToString());
-            return new DriveInfo($"{caption} ({Math.Round((double)size / (1024 * 1024 * 1024), 1)} GB)", deviceID, size);
+            return new DriveInfo($"{deviceID.Substring(4)} - {caption} ({Math.Round((double)size / (1024 * 1024 * 1024), 1)} GB)", deviceID, size);
           })
           .ToList();
       }
