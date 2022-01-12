@@ -3,12 +3,15 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Management;
+using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Timer = System.Timers.Timer;
+using Microsoft.Win32.SafeHandles;
 
 namespace HDD_Ping
 {
@@ -28,6 +31,40 @@ namespace HDD_Ping
 
   internal class HDDPing : Form
   {
+    public const uint GENERIC_READ = 0x80000000;
+    public const uint FILE_SHARE_READ = 1;
+    public const uint FILE_SHARE_WRITE = 2;
+    public const uint OPEN_EXISTING = 3;
+    public const uint FILE_BEGIN = 0;
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateFile(
+        string lpFileName,
+        uint dwDesiredAccess,
+        uint dwShareMode,
+        IntPtr lpSecurityAttributes,
+        uint dwCreationDisposition,
+        uint dwFlagsAndAttributes,
+        IntPtr hTemplateFile
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetFilePointerEx(
+        IntPtr hFile,
+        long liDistanceToMove,
+        IntPtr lpNewFilePointer,
+        uint dwMoveMethod);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool ReadFile(
+        IntPtr hFile,                   // handle to file
+        byte[] lpBuffer,                // data buffer
+        uint nNumberOfBytesToRead,      // number of bytes to read
+        ref uint lpNumberOfBytesRead,   // number of bytes read
+        IntPtr lpOverlapped             // overlapped buffer
+    );
+
+    private readonly Random rnd = new Random();
     private NotifyIcon trayIcon;
     private ContextMenu trayMenu;
     private HDDPing_Settings settings;
@@ -74,13 +111,32 @@ namespace HDD_Ping
         this.SwitchToWorkingIcon();
       }
 
-      foreach (var ds in settings.DriveSettings.Where(ds => ds.Ping))
+      foreach (var di in settings.DriveSettings.Where(ds => ds.Ping).Select(ds => ds.DriveInfo))
       {
-        var guid = Guid.NewGuid().ToString();
         try
         {
-          File.WriteAllText(ds.DriveInfo.Name + guid, guid);
-          File.Delete(ds.DriveInfo.Name + guid);
+          using (SafeFileHandle handleValue = new SafeFileHandle(
+              CreateFile(di.ID, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero), true))
+          {
+            if (handleValue.IsInvalid)
+              Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+
+            byte[] buffer = new byte[sizeof(ulong)];
+            rnd.NextBytes(buffer);
+            ulong lba = BitConverter.ToUInt64(buffer, 0) % (di.Size / 512UL);
+
+            if (!SetFilePointerEx(handleValue.DangerousGetHandle(), (long)(lba * 512UL), IntPtr.Zero, FILE_BEGIN))
+              Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+
+            uint bytesRead = 0;
+            var lpBuffer = new byte[512];
+            if (!ReadFile(handleValue.DangerousGetHandle(), lpBuffer, 512, ref bytesRead, IntPtr.Zero))
+              Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+
+            handleValue.Close();
+
+            System.Diagnostics.Debug.WriteLine(lba);
+          }
         }
         catch { }
       }
@@ -104,12 +160,6 @@ namespace HDD_Ping
       {
         try
         {
-          if (d.DriveType != DriveType.Fixed && d.DriveType != DriveType.Network
-            && d.DriveType != DriveType.Removable && d.DriveType != DriveType.Ram)
-          {
-            continue;
-          }
-
           var driveSetting = settings.DriveSettings.SingleOrDefault(setting =>
             setting.DriveInfo.Name == d.Name);
           var mi = new MenuItem(d.Name)
@@ -132,16 +182,17 @@ namespace HDD_Ping
 
       var timerMenu = new MenuItem("Interval");
       var timerItems = new Dictionary<MenuItem, int>();
-      foreach (var i in Enumerable.Range(1, 25))
+      int[] seconds = { 1, 2, 5, 10, 15, 20, 30, 45, 60 };
+      foreach (var i in seconds)
       {
-        var tMin = new MenuItem(String.Format("{0} {1}", i, i == 1 ? "Minute" : "Minutes"))
+        var tSec = new MenuItem(String.Format("{0} {1}", i, i == 1 ? "Second" : "Seconds"))
         {
-          Checked = (int)settings.Interval.TotalMinutes == i
+          Checked = (int)settings.Interval.TotalSeconds == i
         };
-        tMin.Click += (s, e) =>
+        tSec.Click += (s, e) =>
         {
           var interval = timerItems[s as MenuItem];
-          settings.Interval = TimeSpan.FromMinutes(interval);
+          settings.Interval = TimeSpan.FromSeconds(interval);
 
           this.timer.Interval = settings.Interval.TotalMilliseconds;
 
@@ -152,8 +203,8 @@ namespace HDD_Ping
           (s as MenuItem).Checked = true;
         };
 
-        timerItems.Add(tMin, i);
-        timerMenu.MenuItems.Add(tMin);
+        timerItems.Add(tSec, i);
+        timerMenu.MenuItems.Add(tSec);
       }
 
       trayIcon.ContextMenu.MenuItems.Add(timerMenu);
@@ -182,7 +233,7 @@ namespace HDD_Ping
     {
       trayIcon.Icon = Properties.Resources.working;
 
-      Task.Delay(5000).ContinueWith(finishedTask =>
+      Task.Delay(Math.Min((int)settings.Interval.TotalMilliseconds / 3, 5000)).ContinueWith(finishedTask =>
       {
         this.SetStateIcon();
       });
@@ -242,7 +293,7 @@ namespace HDD_Ping
   {
     public const string ConfigFile = ".settings.ser";
 
-    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(5);
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
 
     public TimeSpan Interval { get; set; }
 
@@ -303,6 +354,39 @@ namespace HDD_Ping
         {
           return false;
         }
+      }
+    }
+  }
+
+  [Serializable]
+  internal class DriveInfo
+  {
+    public string Name { get; private set; }
+    public string ID { get; private set; }
+    public ulong Size { get; private set; }
+
+    public DriveInfo(string name, string id, ulong size)
+    {
+      this.Name = name;
+      this.ID = id;
+      this.Size = size;
+    }
+
+    public static List<DriveInfo> GetDrives()
+    {
+      using (var searcher = new ManagementObjectSearcher(new WqlObjectQuery(
+        "SELECT * FROM Win32_DiskDrive WHERE MediaType = 'Fixed hard disk media'")))
+      {
+        return searcher
+          .Get()
+          .OfType<ManagementObject>()
+          .Select(o => {
+            var caption = o.Properties["Caption"].Value.ToString();
+            var deviceID = o.Properties["DeviceID"].Value.ToString();
+            var size = ulong.Parse(o.Properties["Size"].Value.ToString());
+            return new DriveInfo($"{caption} ({Math.Round((double)size / (1024 * 1024 * 1024), 1)} GB)", deviceID, size);
+          })
+          .ToList();
       }
     }
   }
