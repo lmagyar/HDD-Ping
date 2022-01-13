@@ -134,8 +134,6 @@ namespace HDD_Ping
               Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
 
             handleValue.Close();
-
-            System.Diagnostics.Debug.WriteLine(lba);
           }
         }
         catch { }
