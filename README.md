@@ -6,7 +6,7 @@ A tool to "ping" hard drives to prevent spin-downs and head parking
 
 This application is a Windows tray-only application that reads a random sector from selected hard drives in a given interval.
 
-**Requires admin privilege (to direct read disks).**
+The only difference from the original version is the random sector read instead of writing and deleting a random file. **Direct disk read requires admin privilege.**
 
 --------
 
