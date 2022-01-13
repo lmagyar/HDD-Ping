@@ -20,7 +20,7 @@ Functions:
 - Those states are
   * `1`: disabled (gray, no drive selected),
   * `2`: writing (red for 5 secs when timer elapses)
-  * `3`: active-idle (green, waiting for a timer to elapse to write random file to selected drives)
+  * `3`: active-idle (green, waiting for a timer to elapse to read a random sector from selected drives)
  
 --------
 
