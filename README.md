@@ -1,6 +1,6 @@
 # HDD-Ping v2.0
 
-A tool to "ping" hard drives to prevent spin-downs
+A tool to "ping" hard drives to prevent spin-downs and head parking
 
 --------
 
